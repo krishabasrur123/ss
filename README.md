@@ -42,8 +42,10 @@ Hash table v2: 438,060 usec
   - 0 missing
   ```
 ## V2
+1. 
 Here I added the lock in hash_table_entry. The reason why I didn't do it in list_entry itself because the chances of two thread race condition on the key value pair itself is less than the chances of a race condition on a bucket. If I had done a lock on list_entry, we may still have a race condition where two threads modify the head itself, and adding locks to all -s <element_count> of elements will create too much of a overhead. 
 
+2. 
 In the hash_table_v2_add_entry I initially had the lock set before the line	"struct list_head *list_head = &hash_table_entry->list_head;" where a thread aquires a list_head. Then I realized that even if a thread aquires a list_head, the actual address of the list_head doesn't change, and the thread would follow the list_head pointer inside the lock, so there won't be any race condition on the address list_head itself. This is why the lock is now AFTER the code line above. This significantly increased my number of chances of V2 being (-t x -1 ) times faster.
 
 The way I checked to make sure my understanding was correct was adding:
@@ -55,7 +57,8 @@ printf("After insertion, list_head: %p\n", (void*)list_head);
 ```
 
 If the list_head address value itself wasn't changed, then we know that the other thread can still access list_head because it has the pointer of list_head, not the old value list_head pointed to. That value would be accessed within the lock. 
---------------------------------------------------------------------------------------------------------------
+
+3. 
 Another change I made was with this code below. I realized that both conditions (if you found a key you change the value, but if there is no key you set a list entry) need a unlock. Previously I only used lock for the later condition which caused correctness issues.
 
 This is because if the thread finds that there is a key, it should update and return. But returning without unlocking causes other threads unable to access that list. For example, lets say thread 1 finds a key called "apple" in a list_head address "12345". If thread 1 changes apple's value but returns without unlocking, there is now a barrier for other threads to go into "12345", which make other threads stop as they are waiting for the barrier to unlock. So instead of putting two pieces of the same code, I created a if, else statement, removing the previous return condition and having both if else case fall into the unlocking code. 
@@ -76,9 +79,9 @@ if (list_entry != NULL) {
 	}
 
 ```
--------------------------------------------------------------------------------------------------------------
+4. 
 Now, I had to destroy the locks inside the for loop for (size_t i = 0; i < HASH_TABLE_CAPACITY; ++i) as each rotation of the loop accesses each entry, and we need to access each entry[i] (list) of the loop so we can destroy the lock that was associated with it. This differs with previous implementation of V1 where since we had 1 lock, we only need to demolish the lock once. I also checked if this is correct using valgrind.
------------------------------------------------------------------------------------------------------------------
+
 All of these changes are the reason why V2 works better than Base and V1. 
 
 You can see with the code below, V2 <= Base/(-t x-1). Here 2,120,459 (v2) is less than 2,498,971.33 (base/3) which means our performance is correct.
